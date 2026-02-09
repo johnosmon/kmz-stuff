@@ -1,0 +1,256 @@
+.TH KMZ-CONTOURS 1 "February 2026" "kmz-contours.py" "User Commands"
+.SH NAME
+kmz-contours.py \- generate distance-to-source isolines and optional filled distance bands from KML/KMZ
+
+.SH SYNOPSIS
+.B kmz-contours.py
+.RI [ options ]
+.br
+.B kmz-contours.py
+.BI -i " INPUT"
+.BI -o " OUTPUT"
+.RI [ options ]
+
+.SH DESCRIPTION
+.B kmz-contours.py
+computes a raster distance surface to the nearest input geometry (KML
+.BR LineString
+and/or
+.BR Point )
+contained in an input KML or KMZ, then exports:
+
+.IP \[bu] 2
+distance
+.B isolines
+(contour lines, as KML LineStrings), and optionally
+.IP \[bu]
+color-filled
+.B distance bands
+(as KML Polygons) when
+.B --filled
+is specified.
+
+By default, when
+.B --filled
+is used, the output includes
+.B both
+filled bands
+.B and
+isolines (isolines overlay the fill).
+Use
+.B --no-iso
+to suppress isolines in filled mode.
+
+The output contains
+.B only
+generated geometry (the input points/lines are not included).
+
+Distances are computed in a projected coordinate reference system (CRS) with meter units
+(default:
+.BR EPSG:26913 ).
+
+.SH INPUT/OUTPUT
+I/O behavior is modeled after
+.B normalize-geometry.py
+:
+
+.IP \[bu] 2
+Input defaults to
+.B STDIN
+unless
+.BR -i/--input-file
+is provided.
+.IP \[bu]
+Output defaults to
+.B STDOUT
+unless
+.BR -o/--output-file
+is provided.
+.IP \[bu]
+Input format is automatically detected as KML vs KMZ (by file extension or ZIP signature).
+.IP \[bu]
+Output format defaults to
+.B KML
+(text XML). Use
+.BR -z/--kmz-output
+to write KMZ (ZIP containing doc.kml).
+.IP \[bu]
+Program is silent on success. Use
+.BR -v/--verbose
+for a summary (printed to stderr).
+
+.SH OPTIONS
+.TP
+.BI -i " FILE" ", " --input-file " FILE"
+Input file (KML or KMZ). If omitted, read from STDIN.
+
+.TP
+.BI -o " FILE" ", " --output-file " FILE"
+Output file. If omitted, write to STDOUT.
+
+.TP
+.BR -z ", " --kmz-output
+Write KMZ output (ZIP with doc.kml). Default is KML output.
+
+.TP
+.BR -v ", " --verbose
+Print a brief summary to stderr. Default is silent on success.
+
+.TP
+.BR --filled
+Generate filled distance bands (polygons). Isolines are included by default.
+
+.TP
+.BR --no-iso
+When used with
+.BR --filled ,
+omit isolines from the output.
+
+.TP
+.BI --pixel-m " METERS"
+Raster pixel size in meters used for rasterization and distance computation.
+Default:
+.BR 1000 .
+
+.TP
+.BI --interval-km " KM"
+Distance interval for isolines and band boundaries, in kilometers.
+Default:
+.BR 10 .
+
+.TP
+.BI --max-km " KM"
+Maximum distance (kilometers) to generate isolines/bands.
+Default: auto (maximum value found in the distance raster).
+
+.TP
+.BI --crs " CRS"
+Projected CRS used for distance calculations.
+Default:
+.BR EPSG:26913 .
+
+.TP
+.BI --pad-m " METERS"
+Padding around analysis extent (projected units).
+Default:
+.BR 10000 .
+
+.TP
+.BI --lon-min " LON"
+Minimum longitude of the analysis extent (WGS84 degrees).
+Default:
+.BR -109.05 .
+
+.TP
+.BI --lon-max " LON"
+Maximum longitude of the analysis extent (WGS84 degrees).
+Default:
+.BR -103.00 .
+
+.TP
+.BI --lat-min " LAT"
+Minimum latitude of the analysis extent (WGS84 degrees).
+Default:
+.BR 31.33 .
+
+.TP
+.BI --lat-max " LAT"
+Maximum latitude of the analysis extent (WGS84 degrees).
+Default:
+.BR 37.00 .
+
+.TP
+.BI --debug-png " FILE"
+Write a debug PNG rendering of the bands/isolines to FILE.
+
+.SS Filled-mode styling and cleanup options
+These options are meaningful only when
+.B --filled
+is set.
+
+.TP
+.BI --cmap " NAME"
+Matplotlib colormap used to color distance bands.
+Default:
+.BR viridis .
+
+.TP
+.BI --alpha " 0..1"
+Opacity for polygon fill.
+Default:
+.BR 0.55 .
+
+.TP
+.BI --outline-width " WIDTH"
+Polygon outline width.
+Default:
+.BR 1.2 .
+
+.TP
+.BI --simplify-m " METERS"
+Simplify polygon boundaries in meters (topology-preserving).
+Default:
+.BR 0
+(off).
+
+.TP
+.BI --chaikin-iters " N"
+Chaikin smoothing iterations for polygon rings.
+Default:
+.BR 0
+(off).
+
+.TP
+.BI --min-area-m2 " AREA"
+Drop polygons smaller than AREA (square meters) to remove tiny specks.
+Default:
+.BR 0
+(off).
+
+.SH EXAMPLES
+KMZ input file to KML on stdout:
+.PP
+.nf
+kmz-contours.py -i input.kmz > contours.kml
+.fi
+
+KML input on stdin to KMZ output file:
+.PP
+.nf
+cat input.kml | kmz-contours.py -z -o contours.kmz
+.fi
+
+Filled bands + isolines (default with --filled), write KML:
+.PP
+.nf
+kmz-contours.py -i input.kmz -o out.kml --filled --pixel-m 250 --interval-km 5
+.fi
+
+Filled bands only (no isolines):
+.PP
+.nf
+kmz-contours.py -i input.kmz -o out.kml --filled --no-iso --pixel-m 250 --interval-km 5
+.fi
+
+Verbose summary (to stderr):
+.PP
+.nf
+kmz-contours.py -i input.kmz -o out.kml --pixel-m 250 --interval-km 5 -v
+.fi
+
+.SH EXIT STATUS
+.TP
+.B 0
+Success. No output is printed unless
+.BR -v
+is specified.
+.TP
+.B 2
+Invalid inputs or no geometries found.
+
+.SH SEE ALSO
+.BR python (1),
+.BR matplotlib (3),
+.BR rasterio (1),
+.BR shapely (1),
+.BR pyproj (1)
