@@ -2,15 +2,18 @@
 """
 normalize-multi-geometry.py
 
-Normalize Google Earth KML/KMZ linework for QGIS:
+Normalize Google Earth KML/KMZ linework for QGIS/Google Earth:
 - Explode MultiGeometry placemarks into individual LineString placemarks (when >1 LineString)
 - Clean all LineStrings:
     * drop non-finite coords
     * remove consecutive duplicate XY vertices
     * drop degenerate LineStrings (<2 vertices)
+- Ensure Google Earth–compliant KML root:
+    * <kml> must contain exactly one top-level Feature (typically <Document>)
+      If <kml> has multiple root features (e.g., multiple <Placemark>), wrap in <Document>.
 
 I/O behavior:
-- Default input:  STDIN  (binary or text; KML or KMZ autodetected)
+- Default input:  STDIN  (KML or KMZ autodetected)
 - Default output: STDOUT as KML (UTF-8 XML)
 - Optional -i/--input-file and -o/--output-file
 - Use -z/--kmz-out to output KMZ instead of KML
@@ -30,7 +33,6 @@ from __future__ import annotations
 import argparse
 import io
 import math
-import os
 import re
 import sys
 import zipfile
@@ -59,6 +61,36 @@ def build_parent_map(root: ET.Element) -> dict[ET.Element, ET.Element]:
         for c in list(p):
             parent[c] = p
     return parent
+
+
+def ensure_single_document_root(kml_root: ET.Element) -> None:
+    """
+    Google Earth expects exactly one root Feature under <kml>.
+
+    Valid examples:
+      <kml><Document>...</Document></kml>
+      <kml><Folder>...</Folder></kml>        (still a single Feature)
+      <kml><Placemark>...</Placemark></kml>  (still a single Feature)
+
+    Invalid for Google Earth:
+      <kml><Placemark/> <Placemark/> ...</kml>
+
+    This function wraps multiple root children into a new <Document>.
+    It leaves <kml><Document/></kml> unchanged.
+    """
+    ns = ns_uri_from_root(kml_root)
+    document_tag = q(ns, "Document")
+
+    children = list(kml_root)
+    if len(children) == 1 and children[0].tag == document_tag:
+        return
+
+    # Wrap all existing children under a new Document
+    doc = ET.Element(document_tag)
+    for child in children:
+        kml_root.remove(child)
+        doc.append(child)
+    kml_root.append(doc)
 
 
 # ---------------------------
@@ -131,17 +163,9 @@ def looks_like_zip(b: bytes) -> bool:
     return len(b) >= 4 and b[:4] == b"PK\x03\x04"
 
 
-def decode_text_best_effort(b: bytes) -> str:
-    # KML is almost always UTF-8; fall back to latin-1 to avoid hard fail on odd encodings.
-    try:
-        return b.decode("utf-8")
-    except UnicodeDecodeError:
-        return b.decode("latin-1")
-
-
 def parse_kml_bytes(kml_bytes: bytes) -> ET.Element:
-    # ElementTree expects str or bytes; bytes ok if it has XML declaration.
-    # Ensure it can parse even if the bytes contain BOM or oddities.
+    # Strip leading whitespace/BOM-ish bytes safely
+    kml_bytes = kml_bytes.lstrip()
     return ET.fromstring(kml_bytes)
 
 
@@ -180,18 +204,17 @@ def load_input_as_kml_tree(input_bytes: bytes) -> Tuple[str, ET.Element, List[Tu
     Autodetect KMZ vs KML.
 
     Returns:
-      chosen_kml_name: str (for KMZ it's the selected embedded KML member name; for KML it's '(stdin.kml)' or filename)
-      root: ElementTree root element
-      others: non-KML KMZ members to preserve on KMZ output (empty if input is KML)
+      chosen_kml_name: for KMZ, selected embedded KML member; for KML, "(input.kml)"
+      root: ElementTree root element (<kml>...)
+      others: non-KML KMZ members to preserve on KMZ output (empty for KML input)
     """
     if looks_like_zip(input_bytes):
         chosen_name, chosen_kml, others = read_kmz_choose_kml_from_bytes(input_bytes)
         root = parse_kml_bytes(chosen_kml)
         return chosen_name, root, others
 
-    # Treat as KML text/xml
-    # Keep bytes for parsing because it may include an XML declaration specifying encoding.
-    root = parse_kml_bytes(input_bytes.lstrip())
+    # Treat as KML XML
+    root = parse_kml_bytes(input_bytes)
     return "(input.kml)", root, []
 
 
@@ -221,7 +244,7 @@ def write_kmz_to_bytes(doc_kml_bytes: bytes, others: List[Tuple[str, bytes]]) ->
 
 @dataclass
 class Summary:
-    input_kind: str          # "KML" or "KMZ"
+    input_kind: str
     chosen_kml_name: str
     lines_before: int
     placemarks_exploded: int
@@ -366,15 +389,21 @@ def clean_all_linestrings(root: ET.Element) -> Tuple[int, int, int]:
 def parse_args(argv: List[str]) -> argparse.Namespace:
     p = argparse.ArgumentParser(
         prog="normalize-multi-geometry.py",
-        description="Normalize Google Earth KML/KMZ MultiGeometry LineStrings for QGIS (explode + clean).",
+        description="Normalize Google Earth KML/KMZ MultiGeometry LineStrings for QGIS/Google Earth (explode + clean).",
         add_help=True,  # provides -h/--help
     )
     p.add_argument("-i", "--input-file", help="Input file (KML or KMZ). Default: read from STDIN.")
     p.add_argument("-o", "--output-file", help="Output file. Default: write to STDOUT.")
-    p.add_argument("-z", "--kmz-out", action="store_true",
-                   help="Write KMZ output (doc.kml + preserved assets). Default output is KML.")
-    p.add_argument("-v", "--verbose", action="store_true",
-                   help="Print a processing summary to STDERR.")
+    p.add_argument(
+        "-z", "--kmz-out",
+        action="store_true",
+        help="Write KMZ output (doc.kml + preserved assets). Default output is KML."
+    )
+    p.add_argument(
+        "-v", "--verbose",
+        action="store_true",
+        help="Print a processing summary to STDERR. Default: silent on success."
+    )
     return p.parse_args(argv)
 
 
@@ -382,13 +411,11 @@ def read_input_bytes(args: argparse.Namespace) -> bytes:
     if args.input_file:
         with open(args.input_file, "rb") as f:
             return f.read()
-    # STDIN (binary)
     return sys.stdin.buffer.read()
 
 
 def write_output_bytes(args: argparse.Namespace, out_bytes: bytes) -> None:
     if args.output_file:
-        # Always write binary; KML is UTF-8 bytes
         with open(args.output_file, "wb") as f:
             f.write(out_bytes)
     else:
@@ -414,9 +441,13 @@ def main(argv: List[str]) -> int:
         seen, fixed, removed = clean_all_linestrings(root)
         lines_after_clean = count_linestrings(root)
 
-        # Prepare output
+        # Ensure GE-compliant single root feature under <kml>
+        ensure_single_document_root(root)
+
+        # Serialize KML
         doc_kml_bytes = write_kml_to_bytes(root)
 
+        # Output selection
         if args.kmz_out:
             out_bytes = write_kmz_to_bytes(doc_kml_bytes, others)
         else:
@@ -457,7 +488,6 @@ def main(argv: List[str]) -> int:
         return 0
 
     except (zipfile.BadZipFile, ET.ParseError, ValueError) as e:
-        # Format / input errors
         print(f"ERROR: {e}", file=sys.stderr)
         return 2
     except Exception as e:
