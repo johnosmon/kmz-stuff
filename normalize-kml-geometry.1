@@ -1,0 +1,150 @@
+.TH NORMALIZE-KML-GEOMETRY 1 "February 2026" "normalize-kml-geometry" "User Commands"
+.SH NAME
+normalize-kml-geometry \- normalize Google Earth KML/KMZ geometry for QGIS and Google Earth
+.SH SYNOPSIS
+.B normalize-kml-geometry
+.RB [ \-i " " FILE ]
+.RB [ \-o " " FILE ]
+.RB [ \-z ]
+.RB [ \-v ]
+.RB [ \-h ]
+.SH DESCRIPTION
+.B normalize-kml-geometry
+reads Google Earth KML or KMZ and normalizes geometry and structure for improved interoperability
+with QGIS, GDAL/OGR, and Google Earth.
+
+The tool is intended for KML/KMZ exported from Google Earth (including output produced by
+“Combine into MultiGeometry”), which commonly contains deep MultiGeometry nesting and container
+artifacts that can cause missing features or “invalid geometry” errors in downstream tooling.
+
+The normalization pipeline consists of:
+
+.IP 1. 4
+Google Earth structure normalization:
+.RS 4
+.IP \[bu] 2
+Flatten arbitrarily nested
+.B MultiGeometry
+containers.
+.IP \[bu] 2
+Remove empty geometry containers (empty
+.B MultiGeometry
+and empty
+.B LineString
+without coordinates).
+.IP \[bu] 2
+Collapse single-child
+.B MultiGeometry
+within a Placemark so that a Placemark contains a direct geometry child.
+.RE
+
+.IP 2. 4
+Explode MultiGeometry LineStrings:
+Any Placemark containing a MultiGeometry with more than one LineString descendant is converted into
+multiple Placemarks, each containing exactly one LineString. Relevant metadata (name, styleUrl,
+visibility, description, ExtendedData) is preserved.
+
+.IP 3. 4
+Clean LineStrings:
+Coordinates are sanitized by removing non-finite values (NaN/Inf), removing consecutive duplicate
+XY vertices, and removing degenerate LineStrings with fewer than two vertices after cleaning.
+
+.IP 4. 4
+Root feature normalization (Google Earth compliance):
+Google Earth requires that the root
+.B <kml>
+element contain exactly one top-level Feature. If multiple features exist at the root level, they
+are automatically wrapped inside a new
+.B <Document>
+element.
+
+.IP 5. 4
+Input format autodetection:
+Input is automatically detected as KML or KMZ.
+
+.IP 6. 4
+Output format:
+Output defaults to KML unless overridden with
+.BR \-z / \-\-kmz-out .
+
+.SH OPTIONS
+.TP
+.BR \-i ", " \-\-input-file " " FILE
+Read input from FILE (KML or KMZ). If omitted, input is read from STDIN.
+.TP
+.BR \-o ", " \-\-output-file " " FILE
+Write output to FILE. If omitted, output is written to STDOUT.
+.TP
+.BR \-z ", " \-\-kmz-out
+Write KMZ output instead of KML. The KMZ output is written with a single canonical
+.B doc.kml
+plus any non-KML assets preserved from the original KMZ (icons, overlays, etc.). If the input is KML,
+KMZ output will contain only
+.B doc.kml
+(no additional assets).
+.TP
+.BR \-v ", " \-\-verbose
+Print a processing summary to STDERR. By default the program produces no output when successful.
+.TP
+.BR \-h ", " \-\-help
+Show usage help and exit.
+
+.SH INPUT
+Input may be KML XML data or KMZ archives containing one or more KML documents. When reading KMZ files, the tool
+uses
+.B doc.kml
+if present; otherwise, it selects the largest KML member.
+
+.SH OUTPUT
+Default output is UTF-8 encoded KML. With
+.BR \-z ,
+output is KMZ.
+
+.SH EXAMPLES
+Normalize a KMZ and emit KML:
+.PP
+.nf
+normalize-kml-geometry -i input.kmz -o output.kml
+.fi
+.PP
+Normalize via pipeline:
+.PP
+.nf
+cat input.kmz | normalize-kml-geometry > output.kml
+.fi
+.PP
+Produce KMZ output:
+.PP
+.nf
+normalize-kml-geometry -i input.kmz -o output.kmz -z
+.fi
+.PP
+Verbose summary:
+.PP
+.nf
+normalize-kml-geometry -i input.kmz -o output.kml -v
+.fi
+
+.SH EXIT STATUS
+.TP
+.B 0
+Success.
+.TP
+.B 2
+Usage error or invalid input (empty input, malformed XML, KMZ without KML members).
+.TP
+.B 1
+Unexpected runtime error.
+
+.SH NOTES
+This tool focuses on
+.B LineString
+normalization and Google Earth container cleanup. Other geometry types are preserved structurally but are not
+topologically repaired.
+
+.SH SEE ALSO
+.BR qgis (1),
+.BR ogr2ogr (1)
+
+.SH AUTHOR
+normalize-kml-geometry.
